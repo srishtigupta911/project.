@@ -1,0 +1,68 @@
+import re
+import pdfplumber
+import pandas as pd
+
+# Input / Output paths
+pdf_path = "PDF for Python LLM (1).pdf"
+output_csv = "entities_pans.csv"
+
+# PAN regex
+PAN_RE = re.compile(r'\b([A-Z]{5}[0-9]{4}[A-Z])\b')
+
+def guess_type(name):
+    lower = name.lower()
+    if any(x in lower for x in ['pvt', 'ltd', 'private', 'limited', 'company', 'co.', 'corp', 'corporation']):
+        return 'Organisation'
+    if 'huf' in lower or '(huf)' in lower:
+        return 'Person (HUF)'
+    return 'Person'
+
+def extract_lines_from_pdf(pdf_path):
+    lines = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if text:
+                for l in text.split('\n'):
+                    l2 = ' '.join(l.strip().split())
+                    if l2:
+                        lines.append(l2)
+    return lines
+
+def find_pans_and_entities(lines):
+    results = []
+    for i, line in enumerate(lines):
+        for match in PAN_RE.finditer(line):
+            pan = match.group(1)
+            before = line[:match.start()].strip()
+            after = line[match.end():].strip()
+            entity_candidate = before or (lines[i-1].strip() if i > 0 else "")
+            if not entity_candidate:
+                entity_candidate = after.split()[0] if after else "<UNKNOWN>"
+            entity_type = guess_type(entity_candidate)
+            results.append({
+                "entity": entity_candidate,
+                "type": entity_type,
+                "pan": pan,
+                "relation": "PAN_Of",
+                "related_entity": entity_candidate
+            })
+    return results
+
+def deduplicate_rows(rows):
+    seen = set()
+    out = []
+    for r in rows:
+        key = (r["entity"].lower(), r["pan"])
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
+
+lines = extract_lines_from_pdf(pdf_path)
+rows = find_pans_and_entities(lines)
+rows = deduplicate_rows(rows)
+
+df = pd.DataFrame(rows, columns=["entity", "type", "pan", "relation", "related_entity"])
+df.to_csv(output_csv, index=False)
+print(f"✅ Extracted {len(df)} rows. Saved to {output_csv}")
